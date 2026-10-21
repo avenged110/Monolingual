@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  Log.swift
 //  Monolingual
@@ -13,8 +17,8 @@ final class Log {
 	// password database rather than FileManager, which reports the app's container directory
 	// whenever the app is sandboxed.
 	static var realHomeDirectory: String {
-		if let pw = getpwuid(getuid()) {
-			return String(cString: pw.pointee.pw_dir)
+		if let pw = unsafe getpwuid(getuid()) {
+			return unsafe String(cString: pw.pointee.pw_dir)
 		} else {
 			return FileManager.default.homeDirectoryForCurrentUser.path
 		}
@@ -40,7 +44,7 @@ final class Log {
 	func message(_ message: String, timestamp: Bool = true) {
 		let entry = timestamp ? "\(dateFormatter.string(from: Date())) \(message)" : message
 		let data = [UInt8](entry.utf8)
-		logFile?.write(data, maxLength: data.count)
+		_ = unsafe logFile?.write(data, maxLength: data.count)
 	}
 
 	func close() {

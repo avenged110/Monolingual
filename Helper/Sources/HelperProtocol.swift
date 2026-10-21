@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  HelperProtocol.swift
 //  Monolingual
@@ -7,6 +11,7 @@
 //
 
 import Foundation
+import Security
 import XPC
 
 public extension ProgressUserInfoKey {
@@ -22,24 +27,78 @@ public enum HelperService {
 	/// Name of the launchd property list inside the app bundle.
 	public static let daemonPlistName = "com.github.IngmarStein.Monolingual.PrivilegedHelper.plist"
 
+	/// The team this build is signed by, or nil for a build signed to run locally (ad hoc).
+	///
+	/// `appPeerRequirement` and `helperPeerRequirement` can only be met by code signed by a team,
+	/// so a build without one uses the C XPC API and `legacyAppPeerRequirement` on every macOS
+	/// version — otherwise an ad hoc build would refuse every session on macOS 26 and later.
+	public static let signingTeam: String? = ownTeamIdentifier()
+
 	/// The signing identifier of the app. XPC only accepts sessions from code that is signed by
 	/// the same team and carries this identifier.
-	public static let appSigningIdentifier = "com.github.IngmarStein.Monolingual"
+	public static let appSigningIdentifier = "app.Monolingual"
 
 	/// The signing identifier of the helper.
-	public static let helperSigningIdentifier = "com.github.IngmarStein.Monolingual.Helper"
+	public static let helperSigningIdentifier = "app.Monolingual.Helper"
 
 	/// What the helper requires of its clients: the Monolingual app, signed by the same team.
 	///
 	/// This replaces the pid-based check the `NSXPCConnection` version needed, and unlike that one
 	/// it is enforced by XPC itself, for every session, without a race.
+	@available(macOS 26.0, *)
 	public static var appPeerRequirement: XPCPeerRequirement {
 		.isFromSameTeam(andMatchesSigningIdentifier: appSigningIdentifier)
 	}
 
 	/// What the app requires of the helper it talks to.
+	@available(macOS 26.0, *)
 	public static var helperPeerRequirement: XPCPeerRequirement {
 		.isFromSameTeam(andMatchesSigningIdentifier: helperSigningIdentifier)
+	}
+
+	/// What the helper requires of its clients before macOS 26, as a code signing requirement
+	/// string for the C XPC API — `XPCPeerRequirement` and the Swift initializers that take one
+	/// are macOS 26 only.
+	///
+	/// With a team, this is what `appPeerRequirement` says: the app's identifier, signed by the
+	/// helper's own team. A build signed to run locally has no team, and then the app's own
+	/// designated requirement (its cdhash, for an ad-hoc signature) is the closest equivalent.
+	/// Nil if neither can be worked out, in which case the helper must not serve anyone.
+	public static func legacyAppPeerRequirement(appBundle: URL) -> String? {
+		if let team = signingTeam {
+			return "anchor apple generic and identifier \"\(appSigningIdentifier)\" and certificate leaf[subject.OU] = \"\(team)\""
+		}
+		var staticCode: SecStaticCode?
+		guard unsafe SecStaticCodeCreateWithPath(appBundle as CFURL, [], &staticCode) == errSecSuccess, let staticCode else {
+			return nil
+		}
+		var requirement: SecRequirement?
+		guard unsafe SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement else {
+			return nil
+		}
+		var text: CFString?
+		guard unsafe SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text else {
+			return nil
+		}
+		return text as String
+	}
+
+	/// The team the running process is signed by, if any.
+	private static func ownTeamIdentifier() -> String? {
+		var code: SecCode?
+		guard unsafe SecCodeCopySelf([], &code) == errSecSuccess, let code else {
+			return nil
+		}
+		var staticCode: SecStaticCode?
+		guard unsafe SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else {
+			return nil
+		}
+		var info: CFDictionary?
+		guard unsafe SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+		      let info = info as? [String: Any] else {
+			return nil
+		}
+		return info[kSecCodeInfoTeamIdentifier as String] as? String
 	}
 }
 
@@ -127,8 +186,13 @@ public extension XPCDictionary {
 	/// endpoints, but not for `Data`, so this reaches for the C call the subscript is built on.
 	func setData(_ data: Data, forKey key: String) {
 		withUnsafeUnderlyingDictionary { underlying in
-			data.withUnsafeBytes { bytes in
-				xpc_dictionary_set_data(underlying, key, bytes.baseAddress, bytes.count)
+			unsafe data.withUnsafeBytes { bytes in
+				// An empty buffer may have no base address; XPC needs a pointer all the same.
+				guard let base = bytes.baseAddress else {
+					unsafe xpc_dictionary_set_data(underlying, key, [UInt8](), 0)
+					return
+				}
+				unsafe xpc_dictionary_set_data(underlying, key, base, bytes.count)
 			}
 		}
 	}
@@ -137,10 +201,10 @@ public extension XPCDictionary {
 	func data(forKey key: String) -> Data? {
 		withUnsafeUnderlyingDictionary { underlying in
 			var length = 0
-			guard let bytes = xpc_dictionary_get_data(underlying, key, &length) else {
+			guard let bytes = unsafe xpc_dictionary_get_data(underlying, key, &length) else {
 				return nil
 			}
-			return Data(bytes: bytes, count: length)
+			return unsafe Data(bytes: bytes, count: length)
 		}
 	}
 }

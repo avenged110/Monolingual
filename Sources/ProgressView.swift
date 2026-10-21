@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //
 //  ProgressView.swift
 //  ProgressView
@@ -43,7 +44,7 @@ struct ProgressView: View {
 			}
 		}
 		.padding()
-		.alert("You cancelled the removal. Some files were erased, some were not.", isPresented: alert(.cancelled)) {
+		.alert("You canceled the removal. Some files were erased, some were not.", isPresented: alert(.cancelled)) {
 			Button("OK", role: .cancel) { dismiss() }
 		} message: {
 			Text("Space saved: \(spaceSaved)")

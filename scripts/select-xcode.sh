@@ -2,8 +2,8 @@
 #
 # Pick an Xcode toolchain for building Monolingual.
 #
-# Monolingual needs Xcode 27 or later (the app deploys to macOS 27), while the
-# default Xcode is not necessarily the newest installed one and the default
+# Monolingual needs Xcode 26 or later (the macOS 26 SDK; the app deploys to
+# macOS 15.6), while the default Xcode is not necessarily the newest installed one and the default
 # location is not guaranteed to be the newest. Select by the version each
 # bundle reports, never by filename.
 #
@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-MIN_MAJOR="${MIN_XCODE_MAJOR:-27}"
+MIN_MAJOR="${MIN_XCODE_MAJOR:-26}"
 
 # Version reported by an .app bundle, or empty if it can't be run.
 xcode_version() {

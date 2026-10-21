@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  lipo.swift
 //  Monolingual
@@ -13,6 +17,9 @@ import OSLog
 private let cpuSubtypeMask: cpu_subtype_t = 0xFFFFFF // mask for feature flags
 
 // The maximum section alignment allowed to be specified, as a power of two
+// CPU_SUBTYPE_ARM64E_X1 only exists in the macOS 27 SDK; its value, 12, is confirmed by
+// the Helper Tests fixture hello4 (`otool -fv`).
+let cpuSubtypeARM64EX1: cpu_subtype_t = 12
 private let maxSectionAlign = 15 // 2**15 or 0x8000
 
 /*
@@ -68,7 +75,7 @@ private let archFlags: [ArchFlag] = [
 	ArchFlag(name: "arm64e", cputype: CPU_TYPE_ARM64, cpusubtype: CPU_SUBTYPE_ARM64E),
 	// The hardware-checked pointer arithmetic slice, a sibling of arm64e rather than a
 	// replacement: a fat file can hold both, and removing one leaves the other.
-	ArchFlag(name: "arm64e.x1", cputype: CPU_TYPE_ARM64, cpusubtype: CPU_SUBTYPE_ARM64E_X1),
+	ArchFlag(name: "arm64e.x1", cputype: CPU_TYPE_ARM64, cpusubtype: cpuSubtypeARM64EX1),
 	/* specific architecture implementations */
 	ArchFlag(name: "ppc970-64", cputype: CPU_TYPE_POWERPC64, cpusubtype: CPU_SUBTYPE_POWERPC_970),
 
@@ -301,21 +308,21 @@ public class Lipo {
 			return false
 		}
 
-		return inputData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Bool in
-			let magic = buffer.load(as: UInt32.self)
+		return unsafe inputData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Bool in
+			let magic = unsafe buffer.load(as: UInt32.self)
 			if magic == FAT_MAGIC || magic == FAT_CIGAM {
 				// this file is a 32-bit fat file
-				fatHeader = fatHeaderFromFile(buffer.load(as: fat_header.self))
+				fatHeader = unsafe fatHeaderFromFile(buffer.load(as: fat_header.self))
 				let bigSize = Int(fatHeader.nfat_arch) * MemoryLayout<fat_arch>.size + MemoryLayout<fat_header>.size
 				if bigSize > size {
 					logger.error("truncated or malformed fat file (fat_arch structs would extend past the end of the file) \(self.fileName, privacy: .public)")
 					inputData = nil
 					return false
 				}
-				let fatArchsRawPointer = UnsafeRawBufferPointer(rebasing: buffer.dropFirst(MemoryLayout<fat_header>.size))
-				let fatArchsPointer = fatArchsRawPointer.bindMemory(to: fat_arch.self)
+				let fatArchsRawPointer = unsafe UnsafeRawBufferPointer(rebasing: buffer.dropFirst(MemoryLayout<fat_header>.size))
+				let fatArchsPointer = unsafe fatArchsRawPointer.bindMemory(to: fat_arch.self)
 				let fatArchsCount = Int(fatHeader.nfat_arch)
-				let fatArchs = Array(UnsafeBufferPointer<fat_arch>(start: fatArchsPointer.baseAddress, count: fatArchsCount)).map { self.fatArchFromFile($0) }
+				let fatArchs = unsafe Array(UnsafeBufferPointer<fat_arch>(start: fatArchsPointer.baseAddress, count: fatArchsCount)).map { self.fatArchFromFile($0) }
 				var fatArchSet = Set<ArchKey>()
 				for fatArch in fatArchs {
 					// Both are read out of the file, so the sum is not formed: it overflows — and
@@ -359,17 +366,17 @@ public class Lipo {
 			} else if magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64 {
 				// this file is a 64-bit fat file
 				fat64Flag = true
-				fatHeader = fatHeaderFromFile(buffer.load(as: fat_header.self))
+				fatHeader = unsafe fatHeaderFromFile(buffer.load(as: fat_header.self))
 				let bigSize = Int(fatHeader.nfat_arch) * MemoryLayout<fat_arch_64>.size + MemoryLayout<fat_header>.size
 				if bigSize > size {
 					logger.error("truncated or malformed fat file (fat_arch structs would extend past the end of the file) \(self.fileName, privacy: .public)")
 					inputData = nil
 					return false
 				}
-				let fatArchsRawPointer = UnsafeRawBufferPointer(rebasing: buffer.dropFirst(MemoryLayout<fat_header>.size))
-				let fatArchsPointer = fatArchsRawPointer.bindMemory(to: fat_arch_64.self)
+				let fatArchsRawPointer = unsafe UnsafeRawBufferPointer(rebasing: buffer.dropFirst(MemoryLayout<fat_header>.size))
+				let fatArchsPointer = unsafe fatArchsRawPointer.bindMemory(to: fat_arch_64.self)
 				let fatArchsCount = Int(fatHeader.nfat_arch)
-				let fatArchs = Array(UnsafeBufferPointer<fat_arch_64>(start: fatArchsPointer.baseAddress, count: fatArchsCount)).map { self.fatArch64FromFile($0) }
+				let fatArchs = unsafe Array(UnsafeBufferPointer<fat_arch_64>(start: fatArchsPointer.baseAddress, count: fatArchsCount)).map { self.fatArch64FromFile($0) }
 				var fatArchSet = Set<ArchKey>()
 				for fatArch in fatArchs {
 					// Both are read out of the file, so the sum is not formed: it overflows — and
@@ -420,13 +427,13 @@ public class Lipo {
 		// a symbolic link: the helper runs as root over directories a user can write to, where a
 		// predictable name — or a link planted at it — would otherwise redirect the write.
 		var template = Array("\(fileName!).lipo.XXXXXX".utf8CString)
-		let fd = mkstemp(&template)
+		let fd = unsafe mkstemp(&template)
 		if fd == -1 {
 			logger.error("can't create temporary output file next to \(self.fileName, privacy: .public)")
 			return false
 		}
-		let temporaryFile = template.withUnsafeBufferPointer { buffer in
-			String(cString: buffer.baseAddress!)
+		let temporaryFile = unsafe template.withUnsafeBufferPointer { buffer in
+			unsafe String(cString: buffer.baseAddress!)
 		}
 		let fileHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
 
@@ -485,8 +492,8 @@ public class Lipo {
 			}
 
 			do {
-				try withUnsafePointer(to: &fatHeader) { pointer in
-					let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_header>.size, deallocator: .none)
+				unsafe try withUnsafePointer(to: &fatHeader) { pointer in
+					let data = unsafe Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_header>.size, deallocator: .none)
 					try fileHandle.write(contentsOf: data)
 				}
 			} catch {
@@ -513,8 +520,8 @@ public class Lipo {
 				if fat64Flag {
 					var fatArch = fatArch64ToFile(fat_arch_64(cputype: thinFile.cputype, cpusubtype: thinFile.cpusubtype, offset: thinFile.offset, size: thinFile.size, align: thinFile.align, reserved: 0))
 					do {
-						try withUnsafePointer(to: &fatArch) { pointer in
-							let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch_64>.size, deallocator: .none)
+						unsafe try withUnsafePointer(to: &fatArch) { pointer in
+							let data = unsafe Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch_64>.size, deallocator: .none)
 							try fileHandle.write(contentsOf: data)
 						}
 					} catch {
@@ -524,8 +531,8 @@ public class Lipo {
 				} else {
 					var fatArch = fatArchToFile(fat_arch(cputype: thinFile.cputype, cpusubtype: thinFile.cpusubtype, offset: UInt32(thinFile.offset), size: UInt32(thinFile.size), align: thinFile.align))
 					do {
-						try withUnsafePointer(to: &fatArch) { pointer in
-							let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch>.size, deallocator: .none)
+						unsafe try withUnsafePointer(to: &fatArch) { pointer in
+							let data = unsafe Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch>.size, deallocator: .none)
 							try fileHandle.write(contentsOf: data)
 						}
 					} catch {
@@ -545,8 +552,8 @@ public class Lipo {
 			if fat64Flag {
 				var fatArch = fatArch64ToFile(fat_arch_64(cputype: thinFile.cputype, cpusubtype: thinFile.cpusubtype, offset: thinFile.offset, size: thinFile.size, align: thinFile.align, reserved: 0))
 				do {
-					try withUnsafePointer(to: &fatArch) { pointer in
-						let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch_64>.size, deallocator: .none)
+					unsafe try withUnsafePointer(to: &fatArch) { pointer in
+						let data = unsafe Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch_64>.size, deallocator: .none)
 						try fileHandle.write(contentsOf: data)
 					}
 				} catch {
@@ -556,8 +563,8 @@ public class Lipo {
 			} else {
 				var fatArch = fatArchToFile(fat_arch(cputype: thinFile.cputype, cpusubtype: thinFile.cpusubtype, offset: UInt32(thinFile.offset), size: UInt32(thinFile.size), align: thinFile.align))
 				do {
-					try withUnsafePointer(to: &fatArch) { pointer in
-						let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch>.size, deallocator: .none)
+					unsafe try withUnsafePointer(to: &fatArch) { pointer in
+						let data = unsafe Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch>.size, deallocator: .none)
 						try fileHandle.write(contentsOf: data)
 					}
 				} catch {
@@ -576,8 +583,8 @@ public class Lipo {
 			if fat64Flag {
 				var fatArch = fatArch64ToFile(fat_arch_64(cputype: thinFile.cputype, cpusubtype: thinFile.cpusubtype, offset: thinFile.offset, size: thinFile.size, align: thinFile.align, reserved: 0))
 				do {
-					try withUnsafePointer(to: &fatArch) { pointer in
-						let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch_64>.size, deallocator: .none)
+					unsafe try withUnsafePointer(to: &fatArch) { pointer in
+						let data = unsafe Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch_64>.size, deallocator: .none)
 						try fileHandle.write(contentsOf: data)
 					}
 				} catch {
@@ -587,8 +594,8 @@ public class Lipo {
 			} else {
 				var fatArch = fatArchToFile(fat_arch(cputype: thinFile.cputype, cpusubtype: thinFile.cpusubtype, offset: UInt32(thinFile.offset), size: UInt32(thinFile.size), align: thinFile.align))
 				do {
-					try withUnsafePointer(to: &fatArch) { pointer in
-						let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch>.size, deallocator: .none)
+					unsafe try withUnsafePointer(to: &fatArch) { pointer in
+						let data = unsafe Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: pointer), count: MemoryLayout<fat_arch>.size, deallocator: .none)
 						try fileHandle.write(contentsOf: data)
 					}
 				} catch {
@@ -630,7 +637,7 @@ public class Lipo {
 		let temporaryURL = URL(fileURLWithPath: temporaryFile, isDirectory: false)
 		let inputURL = URL(fileURLWithPath: fileName, isDirectory: false)
 		do {
-			try FileManager.default.replaceItem(at: inputURL, withItemAt: temporaryURL, backupItemName: nil, options: [], resultingItemURL: nil)
+			unsafe try FileManager.default.replaceItem(at: inputURL, withItemAt: temporaryURL, backupItemName: nil, options: [], resultingItemURL: nil)
 			didReplace = true
 		} catch {
 			logger.error("can't move temporary file: '\(temporaryFile, privacy: .public)' to file '\(self.fileName, privacy: .public)': \(error.localizedDescription)")

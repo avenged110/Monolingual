@@ -101,15 +101,13 @@ jobs:
           NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
           NOTARY_KEY_ID: ${{ vars.NOTARY_KEY_ID }}
           NOTARY_ISSUER: ${{ vars.NOTARY_ISSUER }}
-          SPARKLE_ED_KEY: ${{ secrets.SPARKLE_ED_KEY }}
           CODESIGN_IDENTITY: ${{ vars.DEVELOPER_ID }}
         run: |
-          # All four are needed: notarytool takes an App Store Connect API key
-          # (not an Apple ID password, which cannot be used unattended), and
-          # Sparkle's EdDSA key signs the update feed. An empty
+          # All three are needed: notarytool takes an App Store Connect API key
+          # (not an Apple ID password, which cannot be used unattended). An empty
           # CODESIGN_IDENTITY is fine — release.sh falls back to the identity
           # the project signs with.
-          for NAME in NOTARY_KEY NOTARY_KEY_ID NOTARY_ISSUER SPARKLE_ED_KEY; do
+          for NAME in NOTARY_KEY NOTARY_KEY_ID NOTARY_ISSUER; do
             if [ -z "${!NAME}" ]; then
               echo "Error: $NAME is empty. See AGENTS.md for what each one holds."
               exit 1
@@ -141,5 +139,4 @@ jobs:
             --generate-notes \
             "release-${VERSION}/Monolingual-${VERSION}.dmg" \
             "release-${VERSION}/Monolingual-${VERSION}.zip" \
-            "release-${VERSION}/Monolingual.app.dSYM.zip" \
-            "release-${VERSION}/appcast.xml"
+            "release-${VERSION}/Monolingual.app.dSYM.zip"

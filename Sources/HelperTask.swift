@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  HelperTask.swift
 //  Monolingual
@@ -149,16 +153,28 @@ private struct ProgressPeerHandler: XPCPeerHandler {
 		closeConnection()
 
 		do {
-			// The requirement is settled before the session is activated — XPC only accepts it
-			// on a session that is not active yet — so there is no `activate()` to call here.
-			session = try XPCSession(machService: HelperService.machServiceName,
-			                         options: .privileged,
-			                         requirement: HelperService.helperPeerRequirement,
-			                         cancellationHandler: { [weak self] error in
+			let cancellationHandler: @Sendable (XPCRichError) -> Void = { [weak self] error in
 				Task { @MainActor in
 					self?.connectionDidEnd(error)
 				}
-			})
+			}
+			if #available(macOS 26.0, *), HelperService.signingTeam != nil {
+				// The requirement is settled before the session is activated — XPC only accepts it
+				// on a session that is not active yet — so there is no `activate()` to call here.
+				session = try XPCSession(machService: HelperService.machServiceName,
+				                         options: .privileged,
+				                         requirement: HelperService.helperPeerRequirement,
+				                         cancellationHandler: cancellationHandler)
+			} else {
+				// Before macOS 26 the Swift API takes no peer requirement, and a build without a
+				// team (see `HelperService.signingTeam`) has none it could meet. The helper's Mach
+				// service lives in the system domain, where only launchd — from the plist in this
+				// app's bundle — can register it, and the helper checks the app's signature on
+				// its side.
+				session = try XPCSession(machService: HelperService.machServiceName,
+				                         options: .privileged,
+				                         cancellationHandler: cancellationHandler)
+			}
 
 			return true
 		} catch {
@@ -178,7 +194,11 @@ private struct ProgressPeerHandler: XPCPeerHandler {
 		// session the listener accepts, which is what `accept`'s handler form is for.
 		XPCListener { [weak self] request in
 			request.accept { session in
-				session.setPeerRequirement(HelperService.helperPeerRequirement)
+				// Before macOS 26, or without a team, there is no requirement to attach here; the
+				// endpoint is only ever handed to the helper, over the session above.
+				if #available(macOS 26.0, *), HelperService.signingTeam != nil {
+					session.setPeerRequirement(HelperService.helperPeerRequirement)
+				}
 				return ProgressPeerHandler { dictionary in
 					guard let reply = try? HelperWire.message(HelperReply.self, in: dictionary) else {
 						return
@@ -412,7 +432,7 @@ private struct ProgressPeerHandler: XPCPeerHandler {
 		text = NSLocalizedString("Canceling operation...", comment: "")
 		file = ""
 
-		logger.info("Cancelled. Space saved: \(self.byteCount)")
+		logger.info("Canceled. Space saved: \(self.byteCount)")
 
 		progressDidEnd(outcome: .cancelled)
 	}
@@ -471,11 +491,11 @@ private struct ProgressPeerHandler: XPCPeerHandler {
 
 			switch (displayName, appName) {
 			case let (displayName?, app?):
-				message = String(format: NSLocalizedString("Removing language %@ from %@…", comment: ""), displayName, app)
+				message = unsafe String(format: NSLocalizedString("Removing language %@ from %@…", comment: ""), displayName, app)
 			case let (displayName?, nil):
-				message = String(format: NSLocalizedString("Removing language %@…", comment: ""), displayName)
+				message = unsafe String(format: NSLocalizedString("Removing language %@…", comment: ""), displayName)
 			default:
-				message = String(format: NSLocalizedString("Removing %@…", comment: ""), file.absoluteString)
+				message = unsafe String(format: NSLocalizedString("Removing %@…", comment: ""), file.absoluteString)
 			}
 		}
 

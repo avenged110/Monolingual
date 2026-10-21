@@ -11,7 +11,7 @@
 #
 # Release builds with DEBUG_INFORMATION_FORMAT = dwarf-with-dsym and Debug with
 # plain dwarf, so a Debug archive holds no dSYM for the app itself -- only those
-# of Sparkle's prebuilt components -- and there is nothing to collect. The dSYM
+# of prebuilt components -- and there is nothing to collect. The dSYM
 # handling below is conditional for that reason: make development has to work
 # without one.
 #
@@ -25,7 +25,7 @@ cd "$(dirname "$0")/.."
 
 CONFIGURATION="${1:-Release}"
 
-# Xcode 27 is the floor: the app deploys to macOS 27.
+# Xcode 26 is the floor: the project builds against the macOS 26 SDK.
 DEVELOPER_DIR="$(scripts/select-xcode.sh)"
 export DEVELOPER_DIR
 
@@ -58,16 +58,11 @@ IDENTITY=$(codesign -dv --verbose=4 "$ARCHIVED" 2>&1 | sed -n 's/^Authority=//p'
 TEAM=$(codesign -dv --verbose=4 "$ARCHIVED" 2>&1 | sed -n 's/^TeamIdentifier=//p')
 
 if [ -n "$IDENTITY" ]; then
-    # The export is what signs the code inside Sparkle. Xcode signs the
-    # framework as it embeds it but not what the framework carries: Autoupdate,
-    # Updater.app and the two XPC services ship ad-hoc signed and stay that way
-    # through archiving, and notarization rejects them twice over for it ("not
-    # signed with a valid Developer ID certificate", "does not include a secure
-    # timestamp"). Signing them by hand works, and Sparkle documents doing so,
-    # but the export already knows how: it signs every nested item inside-out
-    # with the identity the app was built with, and keeps the entitlements each
-    # one was built with -- Autoupdate loses com.apple.application-identifier
-    # otherwise.
+    # The export signs every nested item inside-out with the identity the app
+    # was built with, keeping the entitlements each one was built with, which
+    # is what notarization checks. (It mattered most for Sparkle's helpers,
+    # which shipped ad-hoc signed; the app no longer embeds Sparkle, and the
+    # export is kept because it signs whatever is nested correctly.)
     #
     # The export can't run on the archive as `xcodebuild archive` leaves it: it
     # reads an ApplicationProperties dictionary out of the archive's Info.plist

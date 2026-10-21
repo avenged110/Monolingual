@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  HelperInstaller.swift
 //  Monolingual
@@ -23,7 +27,7 @@ enum HelperInstallationFailure: Error {
 	/// The registered helper did not answer at all.
 	case helperUnreachable
 	/// Registering the daemon failed.
-	case registrationFailed(Error)
+	case registrationFailed(any Error)
 
 	var title: String {
 		switch self {
@@ -45,7 +49,7 @@ enum HelperInstallationFailure: Error {
 		case .plistNotFound:
 			NSLocalizedString("The Monolingual application bundle is incomplete.", comment: "")
 		case let .outdatedHelper(version):
-			String(format: NSLocalizedString("Monolingual %@ is still installed. Remove it with util/uninstall.sh, then try again.", comment: ""), version)
+			unsafe String(format: NSLocalizedString("Monolingual %@ is still installed. Remove it with util/uninstall.sh, then try again.", comment: ""), version)
 		case .helperUnreachable:
 			NSLocalizedString("A helper utility from an older version of Monolingual may still be registered. Restart your Mac and try again.", comment: "")
 		case let .registrationFailed(error):

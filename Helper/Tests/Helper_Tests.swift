@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  Helper_Tests.swift
 //  Helper Tests
@@ -51,7 +55,7 @@ import HelperShared
 
 		createTestApp(name: "test", bundleIdentifier: "com.test.test")
 		createTestApp(name: "excluded", bundleIdentifier: "com.test.excluded")
-		createTestApp(name: "blocklisted", bundleIdentifier: "com.test.blocklisted")
+		createTestApp(name: "blacklisted", bundleIdentifier: "com.test.blacklisted")
 
 		let testHello1 = testDir.appendingPathComponent("hello1")
 		let testHello2 = testDir.appendingPathComponent("hello2")
@@ -92,7 +96,7 @@ import HelperShared
 		request.includes = [testDir.path]
 		request.excludes = [testDir.appendingPathComponent("excluded.app").path]
 		request.directories = ["fr.lproj"]
-		request.bundleBlocklist = ["com.test.blocklisted"]
+		request.bundleBlacklist = ["com.test.blacklisted"]
 
 		let helperExpectation = expectation(description: "Asynchronous helper processing")
 
@@ -108,9 +112,9 @@ import HelperShared
 			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("excluded.app/Contents/Resources/en.lproj/Localizable.strings").path), "excluded app should be untouched")
 			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("excluded.app/Contents/Resources/de.lproj/Localizable.strings").path), "excluded app should be untouched")
 			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("excluded.app/Contents/Resources/fr.lproj/Localizable.strings").path), "excluded app should be untouched")
-			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("blocklisted.app/Contents/Resources/en.lproj/Localizable.strings").path), "excluded app should be untouched")
-			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("blocklisted.app/Contents/Resources/de.lproj/Localizable.strings").path), "excluded app should be untouched")
-			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("blocklisted.app/Contents/Resources/fr.lproj/Localizable.strings").path), "excluded app should be untouched")
+			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("blacklisted.app/Contents/Resources/en.lproj/Localizable.strings").path), "excluded app should be untouched")
+			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("blacklisted.app/Contents/Resources/de.lproj/Localizable.strings").path), "excluded app should be untouched")
+			XCTAssert(fileManager.fileExists(atPath: self.testDir.appendingPathComponent("blacklisted.app/Contents/Resources/fr.lproj/Localizable.strings").path), "excluded app should be untouched")
 
 			helperExpectation.fulfill()
 		}
@@ -146,7 +150,7 @@ import HelperShared
 		request.includes = [testDir.path]
 		request.excludes = [testDir.appendingPathComponent("excluded.app").path]
 		request.thin = ["i386"]
-		request.bundleBlocklist = ["com.test.blocklisted"]
+		request.bundleBlacklist = ["com.test.blacklisted"]
 
 		let hello1Path = testDir.appendingPathComponent("hello1")
 		let hello2Path = testDir.appendingPathComponent("hello2")
@@ -204,27 +208,27 @@ import HelperShared
 			XCTFail("Could not read '\(url.path)'")
 			return []
 		}
-		return data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> [Slice] in
+		return unsafe data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> [Slice] in
 			// A fat header is big-endian throughout, a thin Mach-O on these machines little-endian.
 			func slice(at base: Int, bigEndian: Bool) -> Slice {
 				func field(_ offset: Int) -> UInt32 {
-					let value = buffer.load(fromByteOffset: offset, as: UInt32.self)
+					let value = unsafe buffer.load(fromByteOffset: offset, as: UInt32.self)
 					return bigEndian ? UInt32(bigEndian: value) : value
 				}
 				return Slice(cputype: cpu_type_t(bitPattern: field(base)),
 				             cpusubtype: cpu_subtype_t(bitPattern: field(base + 4)) & 0xFF_FFFF)
 			}
-			let magic = UInt32(bigEndian: buffer.load(fromByteOffset: 0, as: UInt32.self))
+			let magic = unsafe UInt32(bigEndian: buffer.load(fromByteOffset: 0, as: UInt32.self))
 			// The fat header counts its slices and each fat_arch is 20 bytes, 32 for the 64-bit form.
 			if magic == FAT_MAGIC || magic == FAT_MAGIC_64 {
-				let count = Int(UInt32(bigEndian: buffer.load(fromByteOffset: 4, as: UInt32.self)))
+				let count = unsafe Int(UInt32(bigEndian: buffer.load(fromByteOffset: 4, as: UInt32.self)))
 				let stride = magic == FAT_MAGIC ? 20 : 32
 				return (0 ..< count).compactMap { index -> Slice? in
 					let base = 8 + index * stride
 					return base + 8 <= buffer.count ? slice(at: base, bigEndian: true) : nil
 				}
 			}
-			if buffer.load(fromByteOffset: 0, as: UInt32.self) == MH_MAGIC_64 {
+			if unsafe buffer.load(fromByteOffset: 0, as: UInt32.self) == MH_MAGIC_64 {
 				return [slice(at: 4, bigEndian: false)]
 			}
 			return []
@@ -255,6 +259,8 @@ import HelperShared
 	/// slice must leave both of them alone. The fixture is `util/hello.c` built as
 	/// `clang -O2 -arch x86_64 -arch arm64e -arch arm64e.x1 -o hello4 hello.c`.
 	func testRemoveArm64eX1() {
+		// CPU_SUBTYPE_ARM64E_X1 only exists in the macOS 27 SDK.
+		let cpuSubtypeARM64EX1: cpu_subtype_t = 12
 		let directory = testDir.appendingPathComponent("arm64e")
 		let hello4 = directory.appendingPathComponent("hello4")
 		do {
@@ -268,13 +274,13 @@ import HelperShared
 		XCTAssertEqual(slices(of: hello4), [
 			Slice(cputype: CPU_TYPE_X86_64, cpusubtype: CPU_SUBTYPE_X86_64_ALL),
 			Slice(cputype: CPU_TYPE_ARM64, cpusubtype: CPU_SUBTYPE_ARM64E),
-			Slice(cputype: CPU_TYPE_ARM64, cpusubtype: CPU_SUBTYPE_ARM64E_X1)
+			Slice(cputype: CPU_TYPE_ARM64, cpusubtype: cpuSubtypeARM64EX1)
 		])
 
 		thin(["x86_64"], in: directory)
 		XCTAssertEqual(Set(slices(of: hello4)), [
 			Slice(cputype: CPU_TYPE_ARM64, cpusubtype: CPU_SUBTYPE_ARM64E),
-			Slice(cputype: CPU_TYPE_ARM64, cpusubtype: CPU_SUBTYPE_ARM64E_X1)
+			Slice(cputype: CPU_TYPE_ARM64, cpusubtype: cpuSubtypeARM64EX1)
 		], "removing x86_64 should have left both arm slices")
 
 		thin(["arm64e.x1"], in: directory)
@@ -293,7 +299,7 @@ import HelperShared
 		request.includes = ["/Applications", "/Library"]
 		request.excludes = ["/Library/Logs"]
 		request.directories = ["fr.lproj", "de.lproj"]
-		request.bundleBlocklist = ["com.test.blocked"]
+		request.bundleBlacklist = ["com.test.blocked"]
 		request.thin = ["i386"]
 
 		let reports = expectation(description: "progress, result and the request arrived")

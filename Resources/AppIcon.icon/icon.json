@@ -41,7 +41,7 @@
         "kind" : "none",
         "opacity" : 1
       },
-      "specular" : "inside",
+      "specular" : true,
       "translucency" : {
         "enabled" : false,
         "value" : 0
@@ -67,7 +67,7 @@
         "kind" : "neutral",
         "opacity" : 1.62
       },
-      "specular" : "inside",
+      "specular" : true,
       "translucency" : {
         "enabled" : false,
         "value" : 0.3

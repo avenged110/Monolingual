@@ -3,13 +3,10 @@ import PackageDescription
 
 let package = Package(
     name: "Monolingual",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS("15.6")],
     products: [
         .executable(name: "Helper", targets: ["Helper"]),
         .executable(name: "lipo", targets: ["lipo"])
-    ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.2")
     ],
     targets: [
         .target(
@@ -29,8 +26,7 @@ let package = Package(
             name: "Helper",
             dependencies: [
                 "LipoCore",
-                "HelperShared",
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
+                "HelperShared"
             ],
             path: "Helper/Sources",
             exclude: ["Helper.swift", "HelperContext.swift", "HelperProtocol.swift", "HelperRequest.swift", "MonolingualHelper-Info.plist", "com.github.IngmarStein.Monolingual.PrivilegedHelper.plist"],

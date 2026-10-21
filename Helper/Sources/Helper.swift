@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  Helper.swift
 //  Monolingual
@@ -17,7 +21,7 @@ import LipoCore
 
 extension URL {
 	func hasExtendedAttribute(_ attribute: String) -> Bool {
-		getxattr(path, attribute, nil, 0, 0, XATTR_NOFOLLOW) != -1
+		unsafe getxattr(path, attribute, nil, 0, 0, XATTR_NOFOLLOW) != -1
 	}
 
 	var isProtected: Bool {
@@ -31,12 +35,13 @@ public final class Helper: @unchecked Sendable {
 	/// Sessions inherit this queue, which is what keeps everything below it serialized.
 	private let messageQueue = DispatchQueue(label: "com.github.IngmarStein.Monolingual.Helper.messages")
 	private let workerQueue = OperationQueue()
-	private var listener: XPCListener?
+	/// The listener: an `XPCListener` on macOS 26 and later, an `xpc_connection_t` before.
+	private var listener: AnyObject?
 	/// The session the app opened. Held on to, because the session lives only as long as this
-	/// reference does.
-	private var clientSession: XPCSession?
+	/// reference does. Only used on macOS 26 and later.
+	private var clientSession: AnyObject?
 	/// The app's listener, which progress and the result are reported on.
-	private var progressSession: XPCSession?
+	private var progressSession: ProgressChannel?
 	/// The bookkeeping of the running request, so that the app can still cancel it.
 	private var currentProgress: Progress?
 	private var timer: Timer?
@@ -55,7 +60,7 @@ public final class Helper: @unchecked Sendable {
 	public var version: String {
 		let appPlist = Bundle.main.bundleURL.appending(path: "Contents/Info.plist")
 		if let data = try? Data(contentsOf: appPlist),
-		   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+		   let plist = unsafe try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
 		   let version = plist[kCFBundleVersionKey as String] as? String {
 			return version
 		}
@@ -71,20 +76,24 @@ public final class Helper: @unchecked Sendable {
 	public func run() {
 		logger.info("MonolingualHelper \(self.version, privacy: .public) started")
 
-		do {
-			// XPC checks the peer against this requirement before a session is handed over,
-			// for every session — no pid to look up, and no window to reuse one in.
-			//
-			// A listener listens as soon as it is created; there is no `activate()` to call
-			// here, and calling one would be an API misuse crash.
-			listener = try XPCListener(service: HelperService.machServiceName,
-			                           targetQueue: messageQueue,
-			                           requirement: HelperService.appPeerRequirement) { [self] request in
-				accept(request)
+		if #available(macOS 26.0, *), HelperService.signingTeam != nil {
+			do {
+				// XPC checks the peer against this requirement before a session is handed over,
+				// for every session — no pid to look up, and no window to reuse one in.
+				//
+				// A listener listens as soon as it is created; there is no `activate()` to call
+				// here, and calling one would be an API misuse crash.
+				listener = try XPCListener(service: HelperService.machServiceName,
+				                           targetQueue: messageQueue,
+				                           requirement: HelperService.appPeerRequirement) { [self] request in
+					accept(request)
+				}
+			} catch {
+				logger.error("Failed to serve \(HelperService.machServiceName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+				Darwin.exit(EXIT_FAILURE)
 			}
-		} catch {
-			logger.error("Failed to serve \(HelperService.machServiceName, privacy: .public): \(error.localizedDescription, privacy: .public)")
-			Darwin.exit(EXIT_FAILURE)
+		} else {
+			listenLegacy()
 		}
 
 		startIdleTimer()
@@ -175,7 +184,7 @@ public final class Helper: @unchecked Sendable {
 				}
 			}
 
-			// thin fat binaries
+			// thin fat binaries (a dry run only lists them; see `thinDirectory`)
 			if let archs = pending.thin, let roots, !archs.isEmpty {
 				if let lipo = Lipo(archs: archs) {
 					for root in roots {
@@ -199,14 +208,66 @@ public final class Helper: @unchecked Sendable {
 
 	// MARK: - Serving the app
 
+	/// The code signing requirement the app has to meet before macOS 26.
+	private lazy var legacyRequirement: String? = HelperService.legacyAppPeerRequirement(appBundle: Bundle.main.bundleURL)
+
+	/// Serves the Mach service with the C XPC API, for macOS before 26 and for a build without a
+	/// team (see `HelperService.signingTeam`).
+	///
+	/// The Swift `XPCListener` only takes a peer requirement from macOS 26 on, and without one any
+	/// local process could ask this root daemon to delete files. The C API has enforced a code
+	/// signing requirement per peer connection since macOS 12, and `XPCSession` clients talk to
+	/// `xpc_connection` listeners just the same.
+	private func listenLegacy() {
+		guard let requirement = legacyRequirement else {
+			logger.error("Could not work out the code signing requirement for the app; refusing to serve")
+			Darwin.exit(EXIT_FAILURE)
+		}
+		let listener = unsafe xpc_connection_create_mach_service(HelperService.machServiceName, messageQueue, UInt64(XPC_CONNECTION_MACH_SERVICE_LISTENER))
+		xpc_connection_set_event_handler(listener) { [self] peer in
+			guard unsafe xpc_get_type(peer) == XPC_TYPE_CONNECTION else {
+				return
+			}
+			guard unsafe xpc_connection_set_peer_code_signing_requirement(peer, requirement) == 0 else {
+				logger.error("Rejecting a peer: invalid code signing requirement")
+				xpc_connection_cancel(peer)
+				return
+			}
+			// XPC objects are thread-safe, but not marked Sendable; the handler runs on
+			// `messageQueue` like everything else here.
+			nonisolated(unsafe) let peer = peer
+			unsafe xpc_connection_set_event_handler(peer) { [self] event in
+				// Errors (including a peer that fails the requirement) cancel the connection.
+				guard unsafe xpc_get_type(event) == XPC_TYPE_DICTIONARY else {
+					return
+				}
+				let reply = handle(XPCDictionary(event))
+				guard let reply, let replyObject = xpc_dictionary_create_reply(event) else {
+					return
+				}
+				_ = reply.withUnsafeUnderlyingDictionary { underlying in
+					unsafe xpc_dictionary_apply(underlying) { key, value in
+						unsafe xpc_dictionary_set_value(replyObject, key, value)
+						return true
+					}
+				}
+				unsafe xpc_connection_send_message(peer, replyObject)
+			}
+			unsafe xpc_connection_resume(peer)
+		}
+		xpc_connection_resume(listener)
+		self.listener = listener
+	}
+
 	/// Serves a session the app opened.
+	@available(macOS 26.0, *)
 	private func accept(_ request: XPCListener.IncomingSessionRequest) -> XPCListener.IncomingSessionRequest.Decision {
 		let (decision, session) = request.accept { [self] dictionary in
 			handle(dictionary)
 		}
 		// XPC crashes if a session is released while it is active, so the previous one is
 		// cancelled before it is let go — the app opens a new one for every removal.
-		clientSession?.cancel(reason: "another session arrived")
+		(clientSession as? XPCSession)?.cancel(reason: "another session arrived")
 		clientSession = session
 		return decision
 	}
@@ -242,8 +303,35 @@ public final class Helper: @unchecked Sendable {
 	private func openProgressConnection(to endpoint: XPCEndpoint) {
 		// XPC crashes if a session is released while it is active: the one from a previous
 		// removal is cancelled before it is replaced.
-		progressSession?.cancel(reason: "another request arrived")
+		progressSession?.cancel()
 		progressSession = nil
+
+		guard #available(macOS 26.0, *), HelperService.signingTeam != nil else {
+			guard let requirement = legacyRequirement else {
+				logger.error("Failed to open the connection to the app: no code signing requirement")
+				return
+			}
+			// The endpoint's C object is what the C API connects to.
+			let dictionary = HelperWire.dictionary(carrying: endpoint)
+			let rawEndpoint = dictionary.withUnsafeUnderlyingDictionary { underlying in
+				unsafe xpc_dictionary_get_value(underlying, HelperMessageKey.progress)
+			}
+			guard let rawEndpoint, unsafe xpc_get_type(rawEndpoint) == XPC_TYPE_ENDPOINT else {
+				logger.error("Failed to open the connection to the app: no endpoint")
+				return
+			}
+			let connection = xpc_connection_create_from_endpoint(rawEndpoint)
+			guard unsafe xpc_connection_set_peer_code_signing_requirement(connection, requirement) == 0 else {
+				logger.error("Failed to open the connection to the app: invalid code signing requirement")
+				xpc_connection_cancel(connection)
+				return
+			}
+			xpc_connection_set_target_queue(connection, messageQueue)
+			xpc_connection_set_event_handler(connection) { _ in }
+			xpc_connection_resume(connection)
+			progressSession = .legacy(connection)
+			return
+		}
 
 		do {
 			// A peer requirement can only be attached to a session that is not active yet, so
@@ -252,7 +340,7 @@ public final class Helper: @unchecked Sendable {
 			let session = try XPCSession(endpoint: endpoint, options: .inactive)
 			session.setPeerRequirement(HelperService.appPeerRequirement)
 			try session.activate()
-			progressSession = session
+			progressSession = .session(session)
 		} catch {
 			logger.error("Failed to open the connection to the app: \(error.localizedDescription, privacy: .public)")
 		}
@@ -273,10 +361,10 @@ public final class Helper: @unchecked Sendable {
 		process(request: request, report: reportProgress, reply: reportResult)
 	}
 
-	private func report(_ reply: HelperReply, on session: XPCSession?) {
+	private func report(_ reply: HelperReply, on session: ProgressChannel?) {
 		guard let session = session else { return }
 		do {
-			try session.send(message: HelperWire.dictionary(for: reply))
+			try session.send(HelperWire.dictionary(for: reply))
 		} catch {
 			logger.error("Failed to report to the app: \(error.localizedDescription, privacy: .public)")
 		}
@@ -293,16 +381,44 @@ public final class Helper: @unchecked Sendable {
 
 	// MARK: -
 
+	/// The connection progress and the result go out on.
+	enum ProgressChannel {
+		/// A Swift session with a peer requirement, on macOS 26 and later.
+		case session(XPCSession)
+		/// A C connection with a code signing requirement, before macOS 26.
+		case legacy(xpc_connection_t)
+
+		func send(_ dictionary: XPCDictionary) throws {
+			switch self {
+			case let .session(session):
+				try session.send(message: dictionary)
+			case let .legacy(connection):
+				dictionary.withUnsafeUnderlyingDictionary { underlying in
+					xpc_connection_send_message(connection, underlying)
+				}
+			}
+		}
+
+		func cancel() {
+			switch self {
+			case let .session(session):
+				session.cancel(reason: "another request arrived")
+			case let .legacy(connection):
+				xpc_connection_cancel(connection)
+			}
+		}
+	}
+
 	private func iterateDirectory(_ url: URL, context: HelperContext, prefetchedProperties: [URLResourceKey], block: (URL, FileManager.DirectoryEnumerator) -> Void) {
 		if let progress = context.progress, progress.isCancelled {
 			return
 		}
 
-		if context.isExcluded(url) || context.isDirectoryBlocklisted(url) || (isRootless && url.isProtected) {
+		if context.isExcluded(url) || context.isDirectoryBlacklisted(url) || (isRootless && url.isProtected) {
 			return
 		}
 
-		context.addCodeResourcesToBlocklist(url)
+		context.addCodeResourcesToBlacklist(url)
 
 		let dirEnumerator = context.fileManager.enumerator(at: url, includingPropertiesForKeys: prefetchedProperties, options: [], errorHandler: nil)
 		if let dirEnumerator = dirEnumerator {
@@ -316,11 +432,11 @@ public final class Helper: @unchecked Sendable {
 					let resourceValues = try theURL.resourceValues(forKeys: [.isDirectoryKey])
 
 					if let isDirectory = resourceValues.isDirectory, isDirectory {
-						if context.isExcluded(theURL) || context.isDirectoryBlocklisted(theURL) || (isRootless && theURL.isProtected) {
+						if context.isExcluded(theURL) || context.isDirectoryBlacklisted(theURL) || (isRootless && theURL.isProtected) {
 							dirEnumerator.skipDescendents()
 							continue
 						}
-						context.addCodeResourcesToBlocklist(theURL)
+						context.addCodeResourcesToBlacklist(theURL)
 					}
 				} catch {
 					// ignore
@@ -370,16 +486,24 @@ public final class Helper: @unchecked Sendable {
 				let resourceValues = try theURL.resourceValues(forKeys: [.isRegularFileKey, .isExecutableKey, .isApplicationKey, .isSymbolicLinkKey])
 				// A link is not a file to rewrite, and both `strip` and the `lipo` write path follow
 				// it: a symbolic link named like an executable would have its target rewritten.
-				if let isExecutable = resourceValues.isExecutable, let isRegularFile = resourceValues.isRegularFile, isExecutable, isRegularFile, resourceValues.isSymbolicLink != true, !context.isFileBlocklisted(theURL) {
+				if let isExecutable = resourceValues.isExecutable, let isRegularFile = resourceValues.isRegularFile, isExecutable, isRegularFile, resourceValues.isSymbolicLink != true, !context.isFileBlacklisted(theURL) {
 					if theURL.pathExtension == "class" {
 						return
 					}
 
 					let data = try Data(contentsOf: theURL, options: [.alwaysMapped, .uncached])
 					if data.count >= MemoryLayout<UInt32>.size {
-						data.withUnsafeBytes { (pointer: UnsafeRawBufferPointer) in
-							let magic = pointer.load(as: UInt32.self)
+						unsafe data.withUnsafeBytes { (pointer: UnsafeRawBufferPointer) in
+							let magic = unsafe pointer.load(as: UInt32.self)
 							let isFatMagic = magic == FAT_MAGIC || magic == FAT_CIGAM || magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64
+							// A dry run changes nothing: it names the universal binaries a run would
+							// thin, without a size, since that is only known once `lipo` has run.
+							if context.request.dryRun {
+								if isFatMagic {
+									context.reportProgress(url: theURL, size: 0)
+								}
+								return
+							}
 							if isFatMagic {
 								self.thinFile(url: theURL, context: context, lipo: lipo)
 							}
@@ -407,10 +531,10 @@ public final class Helper: @unchecked Sendable {
 
 	func hasCodeSignature(url: URL) -> Bool {
 		var codeRef: SecStaticCode?
-		let result = SecStaticCodeCreateWithPath(url as CFURL, [], &codeRef)
+		let result = unsafe SecStaticCodeCreateWithPath(url as CFURL, [], &codeRef)
 		if result == errSecSuccess, let codeRef = codeRef {
 			var requirement: SecRequirement?
-			let result2 = SecCodeCopyDesignatedRequirement(codeRef, [], &requirement)
+			let result2 = unsafe SecCodeCopyDesignatedRequirement(codeRef, [], &requirement)
 			return result2 == errSecSuccess
 		}
 		return false
@@ -449,6 +573,10 @@ public final class Helper: @unchecked Sendable {
 				}
 
 				do {
+					// A URL caches the resource values it has read, so without this the size from
+					// before `strip` would come back, and the space it freed would never be reported.
+					var url = url
+					url.removeAllCachedResourceValues()
 					let resourceValues = try url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey])
 					let newSize = resourceValues.totalFileAllocatedSize ?? resourceValues.fileAllocatedSize ?? 0
 

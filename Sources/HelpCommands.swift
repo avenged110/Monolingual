@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  HelpCommands.swift
 //  HelpCommands
@@ -14,14 +18,14 @@ struct HelpCommands: Commands {
 			Button("README.rtfd") {
 				open(bundleResource: NSLocalizedString("README.rtfd", comment: ""))
 			}
-			Button("LICENSE.txt") {
-				open(bundleResource: "LICENSE.txt")
+			Button("License (COPYING)") {
+				openLicense()
 			}
 			Button("Donate") {
 				open(url: "https://ingmarstein.github.io/Monolingual/donate.html")
 			}
 			Button("Monolingual Website") {
-				open(url: "https://ingmarstein.github.io/Monolingual")
+				open(url: "https://github.com/avenged110/Monolingual")
 			}
 		}
 	}
@@ -36,6 +40,17 @@ struct HelpCommands: Commands {
 		let ext = (name as NSString).pathExtension
 		guard let url = Bundle.main.url(forResource: resource, withExtension: ext) else { return }
 		NSWorkspace.shared.open(url)
+	}
+
+	/// Opens the license in TextEdit. `COPYING` has no extension, so the system types it as plain
+	/// data and has no application of its own to open it with.
+	private func openLicense() {
+		guard let url = Bundle.main.url(forResource: "COPYING", withExtension: nil) else { return }
+		guard let textEdit = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") else {
+			NSWorkspace.shared.open(url)
+			return
+		}
+		NSWorkspace.shared.open([url], withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration())
 	}
 
 	private func open(url: String) {

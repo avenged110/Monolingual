@@ -41,35 +41,19 @@
 	<array/>
 	<key>CFBundleVersion</key>
 	<string>2.0.2</string>
-	<key>NSCalendarsUsageDescription</key>
-	<string>Allow this to clean up your unneeded files.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>27.0</string>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyleft 2001, 2002 J. Schrier, 2004-2026 Ingmar Stein.
-Released under the GNU General Public License.</string>
+	<string>Copyright © 2026 avenged110. Licensed under GPL-3.0-only.
+Based on Monolingual, Copyleft 2001, 2002 J. Schrier, 2004-2026 Ingmar Stein.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSServices</key>
 	<array/>
 	<key>NSSupportsSuddenTermination</key>
 	<true/>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://ingmarstein.github.io/Monolingual/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>P85YRJ9R7WqfQtLwAMrfI9U3ogztcq5wc64RD14mPC0=</string>
-	<key>SUEnableInstallerLauncherService</key>
-	<true/>
-	<key>NSContactsUsageDescription</key>
-	<string>Allow this to clean up your unneeded files.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Allow this to clean up your unneeded files.</string>
-	<key>NSRemindersUsageDescription</key>
-	<string>Allow this to clean up your unneeded files.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array/>
 </dict>

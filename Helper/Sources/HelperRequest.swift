@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  HelperRequest.swift
 //  Monolingual
@@ -19,7 +23,7 @@ public struct HelperRequest: Codable, Sendable, Equatable {
 	public var trash = false
 	public var includes: [String]?
 	public var excludes: [String]?
-	public var bundleBlocklist: Set<String>?
+	public var bundleBlacklist: Set<String>?
 	public var directories: Set<String>?
 	public var thin: [String]?
 

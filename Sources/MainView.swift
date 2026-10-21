@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  MainView.swift
 //  MainView
@@ -13,8 +17,12 @@ import OSLog
 import HelperShared
 #endif
 
+// CPU_SUBTYPE_ARM64E_X1 only exists in the macOS 27 SDK; its value, 12, is confirmed by
+// the Helper Tests fixture hello4 (`otool -fv`).
+private let cpuSubtypeARM64EX1: cpu_subtype_t = 12
+
 func mach_task_self() -> mach_port_t {
-	mach_task_self_
+	unsafe mach_task_self_
 }
 
 struct MainView: View {
@@ -29,13 +37,15 @@ struct MainView: View {
 	@State private var architectures: [ArchitectureSetting] = []
 	@State private var languageFilter = ""
 	@State private var architectureFilter = ""
-	@FocusState private var isFilterFocused: Bool
+	@State private var selectedTab = Tab.languages
+	/// Incremented to put the keyboard focus in the search field.
+	@State private var searchFocusRequest = 0
 	@State private var currentArchitecture = "unknown"
 	@State private var showingRemoveLanguagesAlert = false
 	@State private var showingUnchangedAlert = false
 	@State private var showingAllArchitecturesAlert = false
 
-	@State private var blocklist: [BlocklistEntry] = []
+	@State private var blacklist: [BlacklistEntry] = []
 
 	@State private var helperTask = HelperTask()
 
@@ -66,6 +76,16 @@ struct MainView: View {
 		        set: { isPresented in
 			if !isPresented {
 				helperTask.outcome = nil
+			}
+		})
+	}
+
+	/// Whether the alert about an unavailable helper is up; dismissing it clears the failure.
+	private var isShowingInstallationFailure: Binding<Bool> {
+		Binding(get: { helperTask.installationFailure != nil },
+		        set: { isPresented in
+			if !isPresented {
+				helperTask.installationFailure = nil
 			}
 		})
 	}
@@ -118,7 +138,7 @@ struct MainView: View {
 
 			let includes = roots.filter(\.architectures).map(\.path)
 			let excludes = roots.filter { !$0.architectures }.map(\.path) + sipProtectedLocations
-			let bl = Set<String>(blocklist.filter(\.architectures).map(\.bundle))
+			let bl = Set<String>(blacklist.filter(\.architectures).map(\.bundle))
 
 			for item in bl {
 				logger.info("Blocking \(item, privacy: .public)")
@@ -132,7 +152,7 @@ struct MainView: View {
 
 			var request = HelperRequest()
 			request.doStrip = UserDefaults.standard.bool(forKey: "Strip")
-			request.bundleBlocklist = bl
+			request.bundleBlacklist = bl
 			request.includes = includes
 			request.excludes = excludes
 			request.thin = archs
@@ -172,10 +192,10 @@ struct MainView: View {
 
 		let includes = roots.filter(\.languages).map(\.path)
 		let excludes = roots.filter { !$0.languages }.map(\.path) + sipProtectedLocations
-		let bl = blocklist.filter(\.languages).map(\.bundle)
+		let bl = blacklist.filter(\.languages).map(\.bundle)
 
 		for item in bl {
-			logger.info("Blocklisting \(item, privacy: .public)")
+			logger.info("Blacklisting \(item, privacy: .public)")
 		}
 		for include in includes {
 			logger.info("Adding root \(include, privacy: .public)")
@@ -186,7 +206,8 @@ struct MainView: View {
 
 		var rCount = 0
 		var folders = Set<String>()
-		for language in languages where language.enabled {
+		// Protected localizations are left out even if one were somehow checked.
+		for language in languages where language.enabled && !language.isProtected {
 			for path in language.folders {
 				folders.insert(path)
 				log.message(" \(path)", timestamp: false)
@@ -210,7 +231,7 @@ struct MainView: View {
 			var request = HelperRequest()
 			request.trash = UserDefaults.standard.bool(forKey: "Trash")
 			request.uid = getuid()
-			request.bundleBlocklist = Set<String>(bl)
+			request.bundleBlacklist = Set<String>(bl)
 			request.includes = includes
 			request.excludes = excludes
 			request.directories = folders
@@ -270,7 +291,12 @@ struct MainView: View {
 			// that are needed (locale_md, for one) are kept by hand in Localizable.xcstrings.
 			let key = "locale_" + localeIdentifier
 			let displayName = currentLocale.localizedString(forIdentifier: localeIdentifier) ?? Bundle.main.localizedString(forKey: key, value: nil, table: nil)
-			let setting = LanguageSetting(enabled: !userLanguages.contains(localeIdentifier), folders: folders, displayName: displayName)
+			var setting = LanguageSetting(enabled: !userLanguages.contains(localeIdentifier), folders: folders, displayName: displayName)
+			// A protected localization starts out unchecked as well as locked, whatever the
+			// user's languages are.
+			if setting.isProtected {
+				setting.enabled = false
+			}
 			return setting
 		}.sorted { $0.displayName < $1.displayName }
 
@@ -281,7 +307,7 @@ struct MainView: View {
 			ArchitectureInfo(name: "arm64e", displayName: "ARM64E", cpuType: CPU_TYPE_ARM64, cpuSubtype: CPU_SUBTYPE_ARM64E),
 			// Reports its own subtype on the Macs that support it, so without a row of its own
 			// the current architecture there would be "unknown".
-			ArchitectureInfo(name: "arm64e.x1", displayName: "ARM64E.x1", cpuType: CPU_TYPE_ARM64, cpuSubtype: CPU_SUBTYPE_ARM64E_X1),
+			ArchitectureInfo(name: "arm64e.x1", displayName: "ARM64E.x1", cpuType: CPU_TYPE_ARM64, cpuSubtype: cpuSubtypeARM64EX1),
 			ArchitectureInfo(name: "ppc", displayName: "PowerPC", cpuType: CPU_TYPE_POWERPC, cpuSubtype: CPU_SUBTYPE_POWERPC_ALL),
 			ArchitectureInfo(name: "ppc750", displayName: "PowerPC G3", cpuType: CPU_TYPE_POWERPC, cpuSubtype: CPU_SUBTYPE_POWERPC_750),
 			ArchitectureInfo(name: "ppc7400", displayName: "PowerPC G4", cpuType: CPU_TYPE_POWERPC, cpuSubtype: CPU_SUBTYPE_POWERPC_7400),
@@ -298,20 +324,20 @@ struct MainView: View {
 		let hostInfoPointer = host_basic_info_t.allocate(capacity: 1)
 		// `allocate` hands back uninitialized memory, and it is `host_info` that fills it in, so a
 		// call that fails would leave the read below reading whatever happened to be there.
-		hostInfoPointer.initialize(to: host_basic_info_data_t())
+		unsafe hostInfoPointer.initialize(to: host_basic_info_data_t())
 		let myMachHostSelf = mach_host_self()
-		let ret = hostInfoPointer.withMemoryRebound(to: integer_t.self, capacity: Int(infoCount)) { pointer in
-				host_info(myMachHostSelf, HOST_BASIC_INFO, pointer, &infoCount)
+		let ret = unsafe hostInfoPointer.withMemoryRebound(to: integer_t.self, capacity: Int(infoCount)) { pointer in
+				unsafe host_info(myMachHostSelf, HOST_BASIC_INFO, pointer, &infoCount)
 		}
 		mach_port_deallocate(mach_task_self(), myMachHostSelf)
-		var hostInfo = hostInfoPointer.move()
-		hostInfoPointer.deallocate()
+		var hostInfo = unsafe hostInfoPointer.move()
+		unsafe hostInfoPointer.deallocate()
 
 		if hostInfo.cpu_type == CPU_TYPE_X86 {
 			// fix host_info
 			var x8664: Int = 0
 			var x8664Size = Int(MemoryLayout<Int>.size)
-			let sysctlResult = sysctlbyname("hw.optional.x86_64", &x8664, &x8664Size, nil, 0)
+			let sysctlResult = unsafe sysctlbyname("hw.optional.x86_64", &x8664, &x8664Size, nil, 0)
 			if sysctlResult == 0 {
 				if x8664 != 0 {
 					hostInfo = host_basic_info_data_t(
@@ -342,105 +368,146 @@ struct MainView: View {
 		}
 		currentArchitecture = curArch
 
-		// load blocklist from asset catalog
-		if let blocklist = NSDataAsset(name: "blocklist") {
+		// load blacklist from asset catalog
+		if let blacklist = NSDataAsset(name: "blacklist") {
 			let decoder = PropertyListDecoder()
-			self.blocklist = (try? decoder.decode([BlocklistEntry].self, from: blocklist.data)) ?? []
+			self.blacklist = (try? decoder.decode([BlacklistEntry].self, from: blacklist.data)) ?? []
+		}
+	}
+
+	private enum Tab: Hashable {
+		case languages
+		case architectures
+	}
+
+	/// The filter of whichever tab is showing. One search field serves both tabs, so that it
+	/// is a single toolbar item of the window rather than one per tab.
+	private var activeFilter: Binding<String> {
+		Binding(get: { selectedTab == .languages ? languageFilter : architectureFilter },
+		        set: { if selectedTab == .languages { languageFilter = $0 } else { architectureFilter = $0 } })
+	}
+
+	/// Height of the row under each tab's table. Fixed, so that the row cannot make one tab's
+	/// table shorter than the other's: left to their contents, the two rows differ by 3 points.
+	/// 20 is the height the languages tab's row has on its own.
+	private static let footerHeight: CGFloat = 20
+
+	/// Width of the toolbar search field. An ordinary toolbar item is dropped whole rather than
+	/// shrunk when the toolbar runs out of room, so this has to fit beside the tab picker: at the
+	/// window's 550 points, 233 is the widest that does, and this leaves 5 points of slack.
+	private static let searchFieldWidth: CGFloat = 228
+
+	/// One tab's contents. Both tabs go through here, so that their tables come out the same
+	/// size: the heading, the table taking the rest of the space, and a single-line row below it.
+	private func tabPane(@ViewBuilder table: () -> some View, @ViewBuilder footer: () -> some View) -> some View {
+		VStack(alignment: .leading) {
+			Text("Select the items you wish to remove:")
+			table()
+				.frame(maxWidth: .infinity, maxHeight: .infinity)
+			HStack {
+				footer()
+			}
+			.frame(height: Self.footerHeight)
+		}
+		.padding(12)
+	}
+
+	private var languagesTab: some View {
+		tabPane {
+			// See `LanguageSetting.protectedFolders` for the rows that cannot be checked.
+			CheckboxTable(rows: filteredLanguages.map {
+				CheckboxTableRow(id: $0.id, title: $0.displayName, isOn: $0.enabled, isEnabled: !$0.isProtected)
+			}) { id, isOn in
+				// Looked up in the unfiltered list: the filter hides rows, it does not
+				// renumber them, and a toggle has to keep writing through to the setting
+				// it belongs to.
+				if let index = languages.firstIndex(where: { $0.id == id }) {
+					languages[index].enabled = isOn
+				}
+			}
+			.outlinedTable()
+			.overlay {
+				if filteredLanguages.isEmpty {
+					Text("No matches").foregroundStyle(.secondary)
+				}
+			}
+		} footer: {
+			Spacer()
+			Button("Remove…") {
+				// Display a warning first
+				showingRemoveLanguagesAlert = true
+			}
+			.alert("Are you sure you want to remove these languages?", isPresented: $showingRemoveLanguagesAlert) {
+				Button("Cancel", role: .cancel) {}
+				Button("Continue", role: .destructive) {
+					checkAndRemove()
+				}
+			} message: {
+				Text("You will not be able to restore them without reinstalling macOS.")
+			}
+		}
+	}
+
+	private var architecturesTab: some View {
+		tabPane {
+			CheckboxTable(rows: filteredArchitectures.map {
+				CheckboxTableRow(id: $0.id, title: $0.displayName, isOn: $0.enabled)
+			}) { id, isOn in
+				if let index = architectures.firstIndex(where: { $0.id == id }) {
+					architectures[index].enabled = isOn
+				}
+			}
+			.outlinedTable()
+			.overlay {
+				if filteredArchitectures.isEmpty {
+					Text("No matches").foregroundStyle(.secondary)
+				}
+			}
+		} footer: {
+			// One line, like the languages tab's row, so that both tables are the same height.
+			Text("Current architecture: \(currentArchitecture)")
+				.lineLimit(1)
+			Spacer()
+			Button("Remove…") {
+				removeArchitectures()
+			}
 		}
 	}
 
 	var body: some View {
-		TabView {
-			VStack(alignment: .leading) {
-				Text("Select the items you wish to remove:")
-				Table(filteredLanguages) {
-					TableColumn("Remove language") { setting in
-						// Looked up in the unfiltered list: the filter hides rows, it does not
-						// renumber them, and a toggle has to keep writing through to the setting
-						// it belongs to.
-						if let index = languages.firstIndex(where: { $0.id == setting.id }) {
-							Toggle(setting.displayName, isOn: $languages[index].enabled)
-								.toggleStyle(.checkbox)
-								// English is never removable: the system needs it, and its
-								// removal is one of the ways an installation gets broken beyond
-								// repair (see the "never remove the English language files"
-								// entry in the help). Variants such as "U.S. English" are not
-								// matched here and stay removable.
-								.disabled(setting.folders.contains("en.lproj"))
-						}
-					}
+		TabView(selection: $selectedTab) {
+			languagesTab
+				.tabItem {
+					Text("Languages")
 				}
-				// The heading above already says what the single column is for, and the
-				// header row would just be a redundant bar.
-				.tableColumnHeaders(.hidden)
-				.overlay {
-					if filteredLanguages.isEmpty {
-						Text("No matches").foregroundStyle(.secondary)
-					}
+				.tag(Tab.languages)
+			architecturesTab
+				.tabItem {
+					Text("Architectures")
 				}
-				HStack {
-					Spacer()
-					Button("Remove …") {
-						// Display a warning first
-						showingRemoveLanguagesAlert = true
-					}
-					.alert("Are you sure you want to remove these languages?", isPresented: $showingRemoveLanguagesAlert) {
-						Button("Cancel", role: .cancel) {}
-						Button("Continue", role: .destructive) {
-							checkAndRemove()
-						}
-					} message: {
-						Text("You will not be able to restore them without reinstalling macOS.")
-					}
-				}.padding()
-			}
-			.padding()
-			// A search field per tab, so that each one filters the list its tab shows. The
-			// placement puts it in the title bar beside the tab picker; the default gives it a
-			// row of its own under the tabs, which costs the list a row's height.
-			.searchable(text: $languageFilter, placement: .toolbar)
-			.searchFocused($isFilterFocused)
-			.tabItem {
-				Text("Languages")
-			}
-			VStack(alignment: .leading) {
-				Text("Select the items you wish to remove:")
-				Table(filteredArchitectures) {
-					TableColumn("Remove architecture") { setting in
-						if let index = architectures.firstIndex(where: { $0.id == setting.id }) {
-							Toggle(setting.displayName, isOn: $architectures[index].enabled)
-								.toggleStyle(.checkbox)
-						}
-					}
-				}
-				.tableColumnHeaders(.hidden)
-				.overlay {
-					if filteredArchitectures.isEmpty {
-						Text("No matches").foregroundStyle(.secondary)
-					}
-				}
-				HStack {
-					Text("Current architecture: \(currentArchitecture)")
-					Spacer()
-					Button("Remove …") {
-						removeArchitectures()
-					}
-				}.padding()
-			}
-			.padding()
-			.searchable(text: $architectureFilter, placement: .toolbar)
-			.searchFocused($isFilterFocused)
-			.tabItem {
-				Text("Architectures")
+				.tag(Tab.architectures)
+		}
+		.padding(12)
+		// A plain search field rather than `.searchable`, whose toolbar field collapses whenever
+		// it loses focus. See ToolbarSearchField.
+		.toolbar {
+			ToolbarItem(placement: .primaryAction) {
+				ToolbarSearchField(text: activeFilter, prompt: NSLocalizedString("Search", comment: ""), focusRequest: searchFocusRequest)
+					.frame(width: Self.searchFieldWidth)
 			}
 		}
-		.padding()
-		// The search field lives in the toolbar, which quietly drops it once the window is too
-		// narrow to hold it beside the tab picker: it does not go to the overflow menu, and ⌘F
-		// does nothing while it is gone, so a window narrower than this would have no filter at
-		// all. English needs the most room of the 17 localizations — 620 points is where its
-		// field appears — and the rest sit at 560 to 600.
-		.frame(minWidth: 640)
+		// ⌘F puts the focus in the field, as it did with `.searchable`.
+		.background {
+			Button("") { searchFocusRequest += 1 }
+				.keyboardShortcut("f", modifiers: .command)
+				// Invisible but present: a `.hidden()` button does not take its shortcut.
+				.opacity(0)
+				.frame(width: 0, height: 0)
+				.accessibilityHidden(true)
+		}
+		// 550 points holds the tab picker at its full size beside the search field; see
+		// `searchFieldWidth`.
+		.frame(width: 550, height: 450)
 		// Attached here rather than to the button that starts a removal, so that the sheet
 		// reports a removal from either tab. The architecture tab has no confirmation alert
 		// of its own, but it does produce an outcome like any other run.
@@ -460,14 +527,7 @@ struct MainView: View {
 		} message: {
 			Text("Please keep at least one architecture and try again.")
 		}
-		.alert(helperTask.installationFailure?.title ?? "", isPresented: Binding(
-			get: { helperTask.installationFailure != nil },
-			set: { isPresented in
-				if !isPresented {
-					helperTask.installationFailure = nil
-				}
-			}
-		)) {
+		.alert(helperTask.installationFailure?.title ?? "", isPresented: isShowingInstallationFailure) {
 			if helperTask.installationFailure?.canOpenSystemSettings == true {
 				Button("Open System Settings") {
 					HelperInstaller.openSystemSettingsLoginItems()
@@ -481,35 +541,27 @@ struct MainView: View {
 			// The window opens with the search field ready for typing, which is the behavior
 			// the list had before 2.0 and the reason the filter is here at all: open the app,
 			// type a language, watch it narrow.
-			isFilterFocused = true
+			searchFocusRequest += 1
 			loadData()
-			// Load the remote blocklist asynchronously, and only ever let it replace the
-			// blocklist from the asset catalog. The URL below answered with a 404 and an HTML
-			// body at one point, which reset the blocklist to nil and crashed the next removal.
-			//
-			// It is the list of bundles the privileged helper refuses to touch, so losing it
-			// means losing that protection rather than a list going stale: a truncated body, an
-			// empty list, or a redirect to somewhere other than the published URL all leave the
-			// bundled blocklist in place.
-			if let (data, response) = try? await URLSession.shared.data(from: Self.blocklistURL),
-			   let http = response as? HTTPURLResponse,
-			   http.statusCode == 200,
-			   http.url?.scheme == "https",
-			   http.url?.host == Self.blocklistHost,
-			   data.count < 1_000_000,
-			   let entries = try? PropertyListDecoder().decode([BlocklistEntry].self, from: data),
-			   !entries.isEmpty {
-				blocklist = entries
-			}
+			// The blacklist is the one bundled in the asset catalog: the app makes no network
+			// requests.
 		}
 	}
 
-	private static let blocklistURL = URL(string: "https://ingmarstein.github.io/Monolingual/blocklist.plist")!
-	private static let blocklistHost = "ingmarstein.github.io"
 }
 
 struct MainView_Previews: PreviewProvider {
 	static var previews: some View {
 		MainView()
+	}
+}
+
+extension View {
+	/// The outline the app's tables share: a 1-point quaternary stroke around slightly rounded
+	/// corners, in place of the square, darker bezel of `.bordered`.
+	func outlinedTable() -> some View {
+		let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+		return clipShape(shape)
+			.overlay(shape.strokeBorder(.quaternary, lineWidth: 1))
 	}
 }

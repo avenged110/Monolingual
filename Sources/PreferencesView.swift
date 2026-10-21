@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  Preferences.swift
 //  Monolingual
@@ -14,71 +18,76 @@ struct PreferencesView: View {
 	@State private var selection: Root.ID?
 	@AppStorage("Trash") var trash: Bool = false
 	@AppStorage("Strip") var strip: Bool = false
-	// Sparkle falls back to `SUEnableAutomaticChecks` in the Info.plist while the default has
-	// never been written, and that one is set: the toggle has to start out matching it.
-	@AppStorage("SUEnableAutomaticChecks") var automaticChecks: Bool = true
+	/// The settings window, which the folder panel is attached to as a sheet.
+	@State private var hostWindow: NSWindow?
+	@State private var showingResetConfirmation = false
 
 	var body: some View {
 		VStack(alignment: .leading) {
-			GroupBox("Directories") {
+			// No box around the table and its buttons: they take the window's width less its
+			// padding, like everything else in it.
+			Text("Directories:")
+			VStack(alignment: .leading, spacing: 8) {
 				Table(roots, selection: $selection, sortOrder: $sortOrder) {
 					TableColumn("Languages") { root in
 						if let i = roots.firstIndex(where: { $0.id == root.id }) {
 							Toggle(isOn: $roots[i].languages) {}.toggleStyle(.checkbox)
 						}
 					}
-					.width(min: 100, ideal: 110)
+					.width(70)
 					TableColumn("Architectures") { root in
 						if let i = roots.firstIndex(where: { $0.id == root.id }) {
 							Toggle(isOn: $roots[i].architectures) {}.toggleStyle(.checkbox)
 						}
 					}
-					.width(min: 120, ideal: 130)
+					.width(85)
 					TableColumn("Path", value: \.path)
-						.width(min: 220, ideal: 320)
 				}
-				// Enough room for the directories, and the table grows when the window is
-				// made larger instead of leaving empty rows below them.
-				.frame(minHeight: tableHeight, maxHeight: .infinity)
+				.outlinedTable()
 				HStack {
-					Button("+") {
-						let oPanel = NSOpenPanel()
-
-						oPanel.allowsMultipleSelection = true
-						oPanel.canChooseDirectories = true
-						oPanel.canChooseFiles = false
-						oPanel.treatsFilePackagesAsDirectories = true
-
-						oPanel.begin { result in
-							if result == .OK {
-								roots.append(contentsOf: oPanel.urls.map { Root(path: $0.path, languages: true, architectures: true) })
-							}
-						}
+					Button {
+						addDirectories()
+					} label: {
+						addRemoveLabel("plus")
 					}
-					Button("-") {
+					.help("Add a directory")
+					Button {
 						if let selection = selection, let i = roots.firstIndex(where: { $0.id == selection }) {
 							roots.remove(at: i)
 						}
-					}.disabled(selection == nil)
+					} label: {
+						addRemoveLabel("minus")
+					}
+					.help("Remove the selected directory")
+					.disabled(selection == nil)
 					Spacer()
-					Button("Standard") {
-						roots = Root.defaultRoots
+					Button("Reset to Defaults") {
+						showingResetConfirmation = true
+					}
+					.disabled(roots == Root.defaultRoots)
+					.alert("Reset the directories to their defaults?", isPresented: $showingResetConfirmation) {
+						Button("Cancel", role: .cancel) {}
+						Button("Reset", role: .destructive) {
+							roots = Root.defaultRoots
+						}
+					} message: {
+						Text("The list will contain only /Applications and /Library again. Any directories you added are removed from it.")
 					}
 				}
 			}
+			Divider()
+				.padding(.vertical, 4)
 			Toggle("Move language files to Trash", isOn: $trash)
-			Toggle("Automatically check for updates", isOn: $automaticChecks)
 			Toggle("Strip debug info when removing architectures", isOn: $strip)
 		}
-		.padding()
+		.padding(16)
+		.frame(width: 450, height: 300)
+		.background(HostingWindowReader { hostWindow = $0 })
 		.onAppear {
 			if let pref = UserDefaults.standard.array(forKey: "Roots") as? [[String: Any]] {
 				roots = pref.map { Root(dictionary: $0) }
 			} else {
 				roots = Root.defaultRoots
-			}
-			Task { @MainActor in
-				SettingsWindowAdjuster.adjust()
 			}
 		}
 		.onChange(of: roots) { _, newRoots in
@@ -89,33 +98,33 @@ struct PreferencesView: View {
 		}
 	}
 
-	/// Minimum height of the table: the window is sized to the directories, but can be made
-	/// larger.
-	private var tableHeight: CGFloat {
-		min(CGFloat(roots.count) * 24 + 32, 240)
-	}
-}
-
-/// The Settings scene gives its window a fixed size and titles it "<app name>-<Settings>",
-/// for example "Monolingual-Einstellungen". SwiftUI's own modifiers do not change that, so
-/// make the window resizable and drop the app name from its title, keeping whatever
-/// localization the system used.
-enum SettingsWindowAdjuster {
-	@MainActor
-	static func adjust() {
-		let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-			?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-			?? ""
-		for window in NSApp.windows {
-			if !window.styleMask.contains(.resizable) {
-				window.styleMask.insert(.resizable)
+	/// Asks for directories to add, in the shared folder panel, as a sheet on the settings window.
+	private func addDirectories() {
+		// Deferred to the next run-loop turn, as Film Tracker does, so that the panel's focus
+		// changes do not land in the middle of a view update.
+		Task { @MainActor in
+			let configuration = OpenPanelConfiguration(canChooseFiles: false,
+			                                           canChooseDirectories: true,
+			                                           allowsMultipleSelection: true,
+			                                           treatsFilePackagesAsDirectories: true,
+			                                           message: "Select directories to process",
+			                                           prompt: "Add")
+			guard case let .urls(urls) = await OpenPanelPresenter.present(configuration: configuration, attachedTo: hostWindow) else {
+				return
 			}
-			guard !name.isEmpty else { continue }
-			for separator in ["-", " "] where window.title.hasPrefix(name + separator) {
-				window.title = String(window.title.dropFirst(name.count + separator.count))
-				break
+			// A directory is identified by its path, so one that is already listed is not added
+			// again: two rows with the same identity confuse the table.
+			for url in urls where !roots.contains(where: { $0.path == url.path }) {
+				roots.append(Root(path: url.path, languages: true, architectures: true))
 			}
 		}
+	}
+
+	/// The symbol of the + or − button, in a frame both share so the two come out the same
+	/// width: the glyphs alone differ.
+	private func addRemoveLabel(_ systemName: String) -> some View {
+		Image(systemName: systemName)
+			.frame(width: 14, height: 14)
 	}
 }
 

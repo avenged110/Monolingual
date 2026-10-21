@@ -1,0 +1,15 @@
+Monolingual — https://github.com/IngmarStein/Monolingual — GPL-3.0
+Repository LICENSE.txt is the GPL-3.0 text (with the FSF's {placeholder} variant of the
+appendix); no source file states "or later" or any version, so under GPL-3.0 §14 the
+recipient may choose a version, and version 3 is elected. Copyright statement from the
+app's Info.plist / InfoPlist.strings (NSHumanReadableCopyright) at release 2.0.2,
+verified 2026-10-21 against the reference copy of upstream main (2026-10-19). Per-file
+headers name Ingmar Stein ("Created by Ingmar Stein", some "Copyright © <year> Ingmar
+Stein. All rights reserved."); those headers are retained verbatim in every file.
+Same license family as ours, so the obligation is retaining the copyright and marking
+modifications; no extra text.
+Used by: Monolingual
+----------------------------------------------------------------------
+
+Copyleft 2001, 2002 J. Schrier, 2004-2026 Ingmar Stein.
+Released under the GNU General Public License.

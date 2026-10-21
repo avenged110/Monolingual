@@ -8,5 +8,4 @@ build
 Packages
 /release*/
 check
-appcast.xml
 .swiftpm

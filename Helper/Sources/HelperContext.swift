@@ -1,3 +1,7 @@
+// Copyright © 2026 avenged110.
+// Portions Copyright © 2014–2026 Ingmar Stein (Monolingual, https://github.com/IngmarStein/Monolingual).
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from Monolingual and modified by avenged110, 2026.
 //
 //  HelperContext.swift
 //  Monolingual
@@ -14,7 +18,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 	/// Reports progress to the app, which is on the other side of the XPC connection.
 	var reportToClient: ((HelperReply) -> Void)?
 	var progress: Progress?
-	private var fileBlocklist = Set<URL>()
+	private var fileBlacklist = Set<URL>()
 	let fileManager = FileManager()
 	let isRootless: Bool
 	let logger = Logger()
@@ -37,7 +41,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 			excludeDirectory(trashURL)
 		}
 
-		fileManager.delegate = self
+		unsafe fileManager.delegate = self
 	}
 
 	/// Switches the process to `uid`, which is what a file has to be owned by to be moved to that
@@ -48,7 +52,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 	/// would fail at the end of a removal that reported nothing wrong.
 	private func setEffectiveUser(_ uid: uid_t) {
 		if seteuid(uid) != 0 {
-			logger.error("Failed to change to uid \(uid, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
+			logger.error("Failed to change to uid \(uid, privacy: .public): \(unsafe String(cString: strerror(errno)), privacy: .public)")
 		}
 	}
 
@@ -73,36 +77,36 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 		}
 	}
 
-	func isDirectoryBlocklisted(_ path: URL) -> Bool {
-		if let bundle = Bundle(url: path), let bundleIdentifier = bundle.bundleIdentifier, let bundleBlocklist = request.bundleBlocklist {
-			return bundleBlocklist.contains(bundleIdentifier)
+	func isDirectoryBlacklisted(_ path: URL) -> Bool {
+		if let bundle = Bundle(url: path), let bundleIdentifier = bundle.bundleIdentifier, let bundleBlacklist = request.bundleBlacklist {
+			return bundleBlacklist.contains(bundleIdentifier)
 		}
 		return false
 	}
 
-	func isFileBlocklisted(_ url: URL) -> Bool {
-		fileBlocklist.contains(url)
+	func isFileBlacklisted(_ url: URL) -> Bool {
+		fileBlacklist.contains(url)
 	}
 
-	private func addFileDictionaryToBlocklist(_ files: [String: AnyObject], baseURL: URL) {
+	private func addFileDictionaryToBlacklist(_ files: [String: AnyObject], baseURL: URL) {
 		for (key, value) in files {
 			if let valueDict = value as? [String: AnyObject], let optional = valueDict["optional"] as? Bool, optional {
 				continue
 			}
-			fileBlocklist.insert(baseURL.appendingPathComponent(key))
+			fileBlacklist.insert(baseURL.appendingPathComponent(key))
 		}
 	}
 
-	func addCodeResourcesToBlocklist(_ url: URL) {
+	func addCodeResourcesToBlacklist(_ url: URL) {
 		var codeRef: SecStaticCode?
 		// This call might print "MacOS error: -67028" to the console (harmless, but annoying)
 		// See rdar://33203786
-		let result = SecStaticCodeCreateWithPath(url as CFURL, [], &codeRef)
+		let result = unsafe SecStaticCodeCreateWithPath(url as CFURL, [], &codeRef)
 		if result == errSecSuccess, let code = codeRef {
 			var codeInfoRef: CFDictionary?
 			// warning: this relies on kSecCSInternalInformation
 			let secCSInternalInformation = SecCSFlags(rawValue: 1)
-			let result2 = SecCodeCopySigningInformation(code, secCSInternalInformation, &codeInfoRef)
+			let result2 = unsafe SecCodeCopySigningInformation(code, secCSInternalInformation, &codeInfoRef)
 			if result2 == errSecSuccess, let codeInfo = codeInfoRef as? [String: AnyObject] {
 				if let resDir = codeInfo["ResourceDirectory"] as? [String: AnyObject] {
 					let baseURL: URL
@@ -114,13 +118,13 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 						baseURL = url
 					}
 					if let files = resDir["files"] as? [String: AnyObject] {
-						addFileDictionaryToBlocklist(files, baseURL: baseURL)
+						addFileDictionaryToBlacklist(files, baseURL: baseURL)
 					}
 
 					// Version 2 Code Signature (introduced in Mavericks)
 					// https://developer.apple.com/library/mac/technotes/tn2206
 					if let files = resDir["files2"] as? [String: AnyObject] {
-						addFileDictionaryToBlocklist(files, baseURL: baseURL)
+						addFileDictionaryToBlacklist(files, baseURL: baseURL)
 					}
 				}
 			}
@@ -175,13 +179,40 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 		reportToClient?(.progress(file: url.path, size: size, appName: appName))
 	}
 
-	func remove(_ url: URL) {
-		var error: Error?
-		if request.trash {
-			if request.dryRun {
-				return
+	/// Reports what removing `url` would free, without changing anything: the files below it that
+	/// a removal would take, which leaves out files sealed by a code signature — and, when moving
+	/// to the Trash, the whole of `url` if any of them is, since it is then left alone entirely.
+	private func reportDryRun(_ url: URL) {
+		var total = 0
+		let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey]
+		if let dirEnumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: keys, options: [], errorHandler: nil) {
+			for entry in dirEnumerator {
+				guard let theURL = entry as? URL else { continue }
+				if isFileBlacklisted(theURL) {
+					if request.trash {
+						return
+					}
+					continue
+				}
+				if isRootless && theURL.isProtected {
+					continue
+				}
+				if let values = try? theURL.resourceValues(forKeys: Set(keys)) {
+					total += values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0
+				}
 			}
+		}
+		reportProgress(url: url, size: total)
+	}
 
+	func remove(_ url: URL) {
+		if request.dryRun {
+			reportDryRun(url)
+			return
+		}
+
+		var error: (any Error)?
+		if request.trash {
 			var dstURL: NSURL?
 
 			// trashItemAtURL does not call any delegate methods (radar 20481813)
@@ -192,12 +223,16 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 			// return below, and attributes already set would stay set on a directory that is never
 			// trashed — leaving a system directory owned by the user.
 			var reown: [(url: URL, attributes: [FileAttributeKey: Any])] = []
+			// What each of those had before, so that a move to the trash that fails leaves the files
+			// owned as they were rather than handed to the user.
+			var original: [(url: URL, attributes: [FileAttributeKey: Any])] = []
+			let ownershipKeys: Set<FileAttributeKey> = [.ownerAccountID, .posixPermissions]
 
 			// check if any file below `url` has been blocked and record sizes
 			if let dirEnumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isDirectoryKey], options: [], errorHandler: nil) {
 				for entry in dirEnumerator {
 					guard let theURL = entry as? URL else { continue }
-					if isFileBlocklisted(theURL) {
+					if isFileBlacklisted(theURL) {
 						return
 					}
 
@@ -216,6 +251,9 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 							attributes = [.ownerAccountID: request.uid]
 						}
 						reown.append((theURL, attributes))
+						if let current = try? fileManager.attributesOfItem(atPath: theURL.path) {
+							original.append((theURL, current.filter { ownershipKeys.contains($0.key) }))
+						}
 					} catch {}
 				}
 			}
@@ -234,6 +272,9 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 			let parentValues = try? parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
 			let parentIsRealDirectory = parentValues?.isDirectory == true && parentValues?.isSymbolicLink != true
 			let parentAttributes = parentIsRealDirectory ? try? fileManager.attributesOfItem(atPath: parent.path) : nil
+			if let current = try? fileManager.attributesOfItem(atPath: url.path) {
+				original.append((url, current.filter { ownershipKeys.contains($0.key) }))
+			}
 
 			do {
 				try fileManager.setAttributes([.ownerAccountID: request.uid, .posixPermissions: S_IRWXU], ofItemAtPath: url.path)
@@ -248,7 +289,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 			var success = false
 			setEffectiveUser(request.uid)
 			do {
-				try fileManager.trashItem(at: url, resultingItemURL: &dstURL)
+				unsafe try fileManager.trashItem(at: url, resultingItemURL: &dstURL)
 				success = true
 			} catch let error1 {
 				error = error1
@@ -259,7 +300,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 			if !success {
 				do {
 					// move the file to root's trash
-					try fileManager.trashItem(at: url, resultingItemURL: &dstURL)
+					unsafe try fileManager.trashItem(at: url, resultingItemURL: &dstURL)
 					success = true
 				} catch let error1 {
 					error = error1
@@ -275,8 +316,15 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 				for (url, size) in fileSize {
 					reportProgress(url: url, size: size)
 				}
-			} else if let error = error {
-				logger.error("Error trashing '\(url.path, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+			} else {
+				// Nothing was moved, so everything goes back to its owner (the effective user is root
+				// again by now, so the order does not matter).
+				for (theURL, attributes) in original {
+					try? fileManager.setAttributes(attributes, ofItemAtPath: theURL.path)
+				}
+				if let error = error {
+					logger.error("Error trashing '\(url.path, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+				}
 			}
 		} else {
 			do {
@@ -285,7 +333,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 				error = error1
 				let nsError = error1 as NSError
 				if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? NSError, underlyingError.domain == NSPOSIXErrorDomain, underlyingError.code == Int(ENOTEMPTY) {
-					// ignore non-empty directories (they might contain blocklisted files and cannot be removed)
+					// ignore non-empty directories (they might contain blacklisted files and cannot be removed)
 				} else {
 					logger.error("Error removing '\(url.path, privacy: .public)': \(nsError, privacy: .public)")
 				}
@@ -294,7 +342,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 	}
 
 	private func fileManager(_: FileManager, shouldProcessItemAtURL url: URL) -> Bool {
-		if request.dryRun || isFileBlocklisted(url) || (isRootless && url.isProtected) {
+		if request.dryRun || isFileBlacklisted(url) || (isRootless && url.isProtected) {
 			return false
 		}
 
@@ -314,7 +362,7 @@ final class HelperContext: NSObject, FileManagerDelegate, @unchecked Sendable {
 		self.fileManager(fileManager, shouldProcessItemAtURL: url)
 	}
 
-	func fileManager(_: FileManager, shouldProceedAfterError _: Error, removingItemAt _: URL) -> Bool {
+	func fileManager(_: FileManager, shouldProceedAfterError _: any Error, removingItemAt _: URL) -> Bool {
 		// https://github.com/IngmarStein/Monolingual/issues/102
 		// logger.error("Error removing '\(url.path, privacy: .public)': \(error as NSError, privacy: .public)")
 

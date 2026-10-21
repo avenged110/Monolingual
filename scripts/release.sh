@@ -11,10 +11,8 @@
 #                                 stapled copy of the app
 #   Monolingual-<version>.zip     app bundle, notarized and stapled
 #   Monolingual.app.dSYM.zip      debug symbols
-#   appcast.xml                   Sparkle feed for the zip
 #
-# Credentials: see scripts/notarize.sh. The Sparkle signing key is read from
-# the login keychain unless SPARKLE_ED_KEY holds it, which is how CI passes it.
+# Credentials: see scripts/notarize.sh.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -73,7 +71,7 @@ test -x "$APP/Contents/MacOS/com.github.IngmarStein.Monolingual.Helper"
 echo "==> Notarizing the app..."
 # notarytool takes an archive, not a bundle, so the app is zipped for the
 # submission and the zip thrown away again; the app itself is what gets
-# stapled below and packaged for Sparkle.
+# stapled below and packaged.
 NOTARY_ZIP="$BUILD_DIR/Monolingual-notarize.zip"
 rm -f "$NOTARY_ZIP"
 /usr/bin/ditto -c -k --rsrc --keepParent "$APP" "$NOTARY_ZIP"
@@ -100,7 +98,7 @@ cp -R "$BUILD_DIR/Monolingual.app.dSYM.zip" "$RELEASE_DIR"
 # order above keeps a later edit from quietly putting an unstapled app into the
 # image again.
 xcrun stapler validate "$APP" >/dev/null
-cp -R "$APP" "$APP/Contents/Resources"/*.rtfd "$APP/Contents/Resources/LICENSE.txt" \
+cp -R "$APP" "$APP/Contents/Resources"/*.rtfd "$APP/Contents/Resources/COPYING" \
     "$RELEASE_DIR/build"
 tiffutil -cathidpicheck "$TOP/dmg-bg.png" "$TOP/dmg-bg@2x.png" \
     -out "$RELEASE_DIR/build/.dmg-resources/dmg-bg.tiff"
@@ -126,33 +124,6 @@ echo "==> Packaging..."
 mv "$DMG" "$RELEASE_DIR/$RELEASE_NAME.dmg"
 /usr/bin/ditto -c -k --keepParent "$APP" "$RELEASE_ZIP"
 
-echo "==> Signing the update feed..."
-# Sparkle's sign_update is taken from the framework's own package artifacts
-# rather than checked in, so the tool that writes the signature is always the
-# version that ships in the app: an older copy signs a format the framework may
-# no longer read.
-SIGN_UPDATE=""
-for CANDIDATE in "$BUILD_DIR"/DerivedData/SourcePackages/artifacts/sparkle/*/bin/sign_update; do
-    if [ -x "$CANDIDATE" ]; then
-        SIGN_UPDATE="$CANDIDATE"
-        break
-    fi
-done
-if [ -z "$SIGN_UPDATE" ]; then
-    echo "Error: Sparkle's sign_update is not in the package artifacts;" >&2
-    echo "the build did not fetch Sparkle into $BUILD_DIR/DerivedData." >&2
-    exit 1
-fi
-if [ -n "${SPARKLE_ED_KEY:-}" ]; then
-    SIGNATURE=$(printf '%s' "$SPARKLE_ED_KEY" | "$SIGN_UPDATE" --ed-key-file - "$RELEASE_ZIP")
-else
-    SIGNATURE=$("$SIGN_UPDATE" "$RELEASE_ZIP")
-fi
-sed -e "s/%VERSION%/$VERSION/g" \
-    -e "s/%PUBDATE%/$(LC_ALL=C date +"%a, %d %b %G %T %z")/g" \
-    -e "s/%FILENAME%/$RELEASE_NAME.zip/g" \
-    -e "s@%SIGNATURE%@$SIGNATURE@g" \
-    appcast.xml.tmpl > "$RELEASE_DIR/appcast.xml"
 
 rm -rf "$RELEASE_DIR/build"
 
